@@ -1,0 +1,14 @@
+cb_2018_us_county_20m
+    shapefile containing county boundaries for the US
+    US Census
+    https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html
+
+storm-events
+    a collection of csv files for different years tabulating extreme weather events
+    NOAA
+    https://www.ncdc.noaa.gov/stormevents/ftp.jsp
+    consipicous drop off in file size before ~1994
+
+state-fips
+    numeric codes for states, needed to parse the county shapefile accurately
+    scraped from: https://www.nrcs.usda.gov/wps/portal/nrcs/detail/?cid=nrcs143_013696
