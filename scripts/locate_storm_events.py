@@ -2,7 +2,7 @@ from os import listdir
 from os.path import join
 from pandas import read_csv, concat
 from geopandas import read_file
-from numpy import isnan
+from numpy import *
 
 #------------------------------------------------------------------------------
 
@@ -39,7 +39,7 @@ cols = [
 ]
 
 #output file path
-fnout = join('..', 'data',  'pro', 'storm_events.csv')
+fnout = join('..', 'data',  'pro', 'storm_events.feather')
 
 #county shapefile
 fncounty = join('..', 'data', 'raw', 'us-counties', 'cb_2018_us_county_20m.shp')
@@ -71,11 +71,14 @@ county['centroid_lat'] = county.geometry.map(lambda g: g.centroid.y)
 #mapping between state code and state name
 state2fips = dict(zip(fips.name.values, fips.fips.values))
 
-#some extra massaging
+#some extra maniupulation
 storm.cz_name = [n.lower() for n in storm.cz_name]
 county.columns = [c.lower() for c in county.columns]
 county.name = [n.lower() for n in county.name]
 county.statefp = county.statefp.astype(int)
+
+#store a flag for whether the location has been filled here
+storm['location_filled'] = zeros(len(storm), dtype=bool_)
 
 print("fraction missing location ~", sum(isnan(storm.begin_lon))/len(storm))
 
@@ -93,8 +96,18 @@ for i in storm.index:
             if len(sl) == 1:
                 storm.at[i,'begin_lon'] = sl.centroid_lon
                 storm.at[i,'begin_lat'] = sl.centroid_lat
+                storm.at[i,'location_filled'] = True
 
 print("fraction missing location ~", sum(isnan(storm.begin_lon))/len(storm))
 
-storm.to_csv(fnout, index=False)
+#squeeze data into smaller types
+print('converting data types')
+for col in storm.columns:
+    d = storm[col].dtype
+    if d == int64:
+        storm[col] = storm[col].astype(int32)
+    if d == float64:
+        storm[col] = storm[col].astype(float32)
+
+storm.to_feather(fnout)
 print("file written:", fnout)

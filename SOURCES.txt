@@ -12,3 +12,13 @@ storm-events
 state-fips
     numeric codes for states, needed to parse the county shapefile accurately
     scraped from: https://www.nrcs.usda.gov/wps/portal/nrcs/detail/?cid=nrcs143_013696
+
+north american regional reanalysis
+    high resolution atmospheric reanalysis
+    NOAA
+    described here: https://psl.noaa.gov/data/gridded/data.narr.html
+        pressure variables listed here: https://psl.noaa.gov/data/gridded/data.narr.pressure.html
+        monolevel variables listed here: https://psl.noaa.gov/data/gridded/data.narr.monolevel.html
+        no subsurface variables are used in this project
+    downloaded from: https://downloads.psl.noaa.gov/Datasets/NARR/
+    lots of "data", so they are downloaded in batch to Google Cloud Storage using urllist.txt
