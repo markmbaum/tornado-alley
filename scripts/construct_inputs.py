@@ -1,19 +1,23 @@
 # %%
 
 from os.path import join
+from copy import deepcopy
 from numpy import *
 from numpy.random import rand
-from pandas import read_feather, to_datetime, Timestamp, Timedelta, Period
-from xarray import open_dataset, Dataset
+from pandas import read_feather, Timestamp, Period, DataFrame
+from xarray import open_dataset, Dataset, concat
 
 #------------------------------------------------------------------------------
 # %% INPUTS
 
-#directory where the storm table is located
+#directory where the tornado alley storm data is located
 STORMDIR = join('..', 'data', 'pro')
 
-#directory with monolevel and pressure subdirectories
+#directory with 'monolevel' and 'pressure' subdirectories
 NCDIR = join('..', 'data', 'test')
+
+#directory for output netcdf files
+OUTDIR = join('..', 'data', 'pro', 'inputs')
 
 #variables with three spatial dimensions (on pressure levels)
 PVAR = [
@@ -42,7 +46,7 @@ YEARS = range(2008, 2009)
 MONTHS = range(6,8)
 
 #number of non-storm inputs to create for every storm in a given month
-RNORMAL = 5
+NNONSTORM = 5
 
 #------------------------------------------------------------------------------
 # %% FUNCTIONS
@@ -62,6 +66,31 @@ def pressure_path(name, year, month):
 #open a pressure level data file (lazily)
 def open_pressure(name, year, month):
     return open_dataset(pressure_path(name, year, month))
+
+#--------------------------------------
+
+def attrs2df(ds):
+    d = dict()
+    for k in ds[0].attrs.keys():
+        d[k] = [x.attrs[k] for x in ds]
+    df = DataFrame(d)
+    return df
+
+#write an input Dataset to file
+def write_inputs(ds, name, year, month):
+    #pack all the attributes into a dataframe
+    df = attrs2df(ds)
+    #concatenate all the blocks into a single Dataset along a new index
+    X = concat(ds, 'index')
+    #file name base
+    fnb = join(OUTDIR, f'{year}_{month}_{name}_')
+    #write attribute table to compressed file
+    df.to_feather(fnb + 'attributes.feather')
+    #write the input block to netcdf after stripping off attributes
+    X.attrs = {}
+    X.to_netcdf(fnb + 'inputs.nc')
+
+    return None
 
 #--------------------------------------
 
@@ -86,7 +115,7 @@ def random_coordinate(year, month):
     mb = month_begin(year, month)
     me = month_end(year, month)
     f = rand()
-    t = mb + f*(me - mb)
+    t = mb + f*(me - mb).floor('s') #round to the nearest second
     lat = (MAXLAT - MINLAT)*rand() + MINLAT
     lon = (MAXLON - MINLON)*rand() + MINLON
     return t, lat, lon
@@ -118,9 +147,9 @@ def blank_input(attrs=dict()):
     ds = Dataset(
         data_vars=data_vars,
         coords=dict(
-            levels=range(29),
-            y=range(2*LATOFFSET),
-            x=range(sum(LONOFFSET))
+            levels=arange(29, dtype=int16),
+            y=arange(2*LATOFFSET, dtype=int16),
+            x=arange(sum(LONOFFSET), dtype=int16)
         ),
         attrs=dict(attrs)
     )
@@ -143,7 +172,7 @@ def find_cell(q, V):
 
     return L
 
-def interpolate_monolevel(time, lat, lon, Lat, Lon, M, k):
+def interpolate_monolevel(time, lat, lon, Lat, Lon, M, k, ds):
     #locate indices of nearest grid cell
     ilat, ilon = nearest_cell(lat, lon, Lat, Lon)
     #find the nearest cell in time
@@ -160,7 +189,29 @@ def interpolate_monolevel(time, lat, lon, Lat, Lon, M, k):
     assert t1 <= time <= t2
     f = (time - t1).total_seconds()/(3*3600)
     X = (1 - f)*X[0,:,:] + f*X[1,:,:]
-    return X.values
+    ds[k][:] = X.values
+    return None
+
+def interpolate_pressure(time, lat, lon, Lat, Lon, P, k, ds):
+    #locate indices of nearest grid cell
+    ilat, ilon = nearest_cell(lat, lon, Lat, Lon)
+    #find the nearest cell in time
+    #itime = searchsorted(M[k].coords['time'].values, time)
+    itime = find_cell(time, P[k].coords['time'].values)
+    #slice the variable
+    X = P[k][k][
+        itime : itime + 2,
+        :,
+        ilat - LATOFFSET : ilat + LATOFFSET,
+        ilon - LONOFFSET[0] : ilon + LONOFFSET[1]
+    ]
+    #interpolate along the time axis
+    t1, t2 = X.coords['time'].values
+    assert t1 <= time <= t2
+    f = (time - t1).total_seconds()/(3*3600)
+    X = (1 - f)*X[0,:,:,:] + f*X[1,:,:,:]
+    ds[k][:] = X.values
+    return None
     
 #------------------------------------------------------------------------------
 # %% MAIN
@@ -183,25 +234,35 @@ df['time'] = df['time'].map(lambda x: x.tz_localize(None))
 df['year'] = df.time.map(lambda x: x.year)
 df['month'] = df.time.map(lambda x: x.month)
 
+#convert the 'location_filled' flag to integers for writing netcdf files
+df['location_filled'] = df.location_filled.map(uint8)
+
 #--------------------------------------
 # %%
 
 for year in YEARS:
+
     #load monolevel datasets, which cover whole years, lazily
     M = {name: open_monolevel(name, year) for name in MVAR}
+
     for month in MONTHS:
+
         #Load pressure level datasets, which cover single months, lazily
         P = {name: open_pressure(name, year, month) for name in PVAR}
+
         #slice out storms during this year-month period
         sl = df[(df.year == year) & (df.month == month)].copy()
         sl.sort_values('time', inplace=True)
         L = len(sl)
         sl.index = range(L)
+
         #create blank inputs for each storm
         storms = [blank_input(row) for (_, row) in sl.iterrows()]
+
         #create random coordinates for normal (non-storm) conditions
-        time, lat, lon = random_coordinates(RNORMAL*L, year, month)
-        #create blank inputs annotated with distance to closest storm (including in time)
+        time, lat, lon = random_coordinates(NNONSTORM*L, year, month)
+
+        #create blank for non-storm inputs, annotated with distance to closest storm (including in time)
         idx = searchsorted(sl.time, time)
         idx[idx >= L] = L - 1
         norms = []
@@ -215,51 +276,38 @@ for year in YEARS:
                 lat=lat[i],
                 lon=lon[i],
                 type='Non-storm',
-                time_close=dt, #hours
-                lat_close=dlat, #degrees
-                lon_close=dlon, #degrees
-                type_close=sl.type[j]
+                time_close=dt, #time of closest storm [hours]
+                lat_close=dlat, #latitude of closest storm [degrees]
+                lon_close=dlon, #longitude of closest storm [degrees]
+                type_close=sl.type[j] #type of nearest storm
             ))
             norms.append(ds)
+
         #retrieve the lat-lon grid
         X = next(iter(M.values()))
         Lat, Lon = X.coords['lat'].values, X.coords['lon'].values
+
         #fill in the blank input blocks
         for k in M:
             #storms
             for i in range(L):
-                storms[i][k][:] = interpolate_monolevel(
-                    sl.time[i],
-                    sl.lat[i],
-                    sl.lon[i],
-                    Lat,
-                    Lon,
-                    M,
-                    k
-                )
-            #norms
-            for i in range(len(norms)):
-                norms[i][k][:] = interpolate_monolevel(
-                    time[i],
-                    lat[i],
-                    lon[i],
-                    Lat,
-                    Lon,
-                    M,
-                    k
-                )
+                interpolate_monolevel(sl.time[i], sl.lat[i], sl.lon[i], Lat, Lon, M, k, storms[i])
+            for i in range(L*NNONSTORM):
+                interpolate_monolevel(time[i], lat[i], lon[i], Lat, Lon, M, k, norms[i])
         for k in P:
             #storms
             for i in range(L):
-                pass
-            #norms
-            for i in range(len(norms)):
-                pass
+                interpolate_pressure(sl.time[i], sl.lat[i], sl.lon[i], Lat, Lon, P, k, storms[i])
+            for i in range(L*NNONSTORM):
+                interpolate_pressure(time[i], lat[i], lon[i], Lat, Lon, P, k, norms[i])
         
-
         #close all the pressure level datasets
         for k in P:
             P[k].close()
+
+        #write the newly created inputs to file as whole-month blocks
+        write_inputs(storms, 'storm', year, month)
+        write_inputs(norms, 'non-storm', year, month)
     
     #close all the monolevel datasets
     for k in M:
