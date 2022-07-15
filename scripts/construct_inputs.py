@@ -237,13 +237,14 @@ def construct_inputs(year, month, df):
     #slice out storms during this year-month period
     sl = df[(df.year == year) & (df.month == month)].copy()
     sl.sort_values('time', inplace=True)
-    L = len(sl)
-    sl.index = range(L)
-    print(L, 'storm events in {}-{}'.format(year, month))
 
     #also remove rare events in the last 3 hours of the month
     t = month_end(year, month) - Timedelta(3, 'hr')
     sl = sl[sl.time < t.to_numpy()]
+
+    L = len(sl)
+    sl.index = range(L)
+    print(L, 'storm events in {}-{}'.format(year, month))
 
     if L > 0:
 
