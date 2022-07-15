@@ -6,8 +6,9 @@ cb_2018_us_county_20m
 storm-events
     a collection of csv files for different years tabulating extreme weather events
     NOAA
-    https://www.ncdc.noaa.gov/stormevents/ftp.jsp
-    consipicous drop off in file size before ~1994
+    main page: https://www.ncdc.noaa.gov/stormevents/
+    bulk download page: https://www.ncdc.noaa.gov/stormevents/ftp.jsp
+    consipicous drop off in file size before ~1994, but (https://www.ncdc.noaa.gov/stormevents/details.jsp) indicates that a data collection transition may have happened around '96
 
 state-fips
     numeric codes for states, needed to parse the county shapefile accurately

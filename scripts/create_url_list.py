@@ -7,7 +7,7 @@ fnout = join('..', 'urllist.txt')
 urlbase = 'https://downloads.psl.noaa.gov/Datasets/NARR/'
 
 #single level variables
-monolevels = ['air.2m', 'cape', 'cdcon', 'hcdc', 'lcdc', 'mcdc', 'pt_wtr', 'rhum.2m', 'tke.hl1']
+monolevels = ['cape', 'cdcon', 'dswrf']
 
 #multiple level variables
 pressure = ['hgt', 'uwnd', 'vwnd', 'omega', 'air', 'shum']

@@ -1,11 +1,14 @@
 # %%
 
+import warnings
+from os import cpu_count
 from os.path import join
-from copy import deepcopy
 from numpy import *
 from numpy.random import rand
-from pandas import read_feather, Timestamp, Period, DataFrame
+from pandas import read_feather, Timestamp, Timedelta, Period, DataFrame
+import xarray
 from xarray import open_dataset, Dataset, concat
+from multiprocessing import Pool
 
 #------------------------------------------------------------------------------
 # %% INPUTS
@@ -14,21 +17,26 @@ from xarray import open_dataset, Dataset, concat
 STORMDIR = join('..', 'data', 'pro')
 
 #directory with 'monolevel' and 'pressure' subdirectories
-NCDIR = join('..', 'data', 'test')
+NCDIR = join('..', 'data', 'netcdf')
 
 #directory for output netcdf files
 OUTDIR = join('..', 'data', 'pro', 'inputs')
 
 #variables with three spatial dimensions (on pressure levels)
 PVAR = [
+    'hgt',
+    'uwnd',
+    'vwnd',
     'air',
-    'hgt'
+    'omega',
+    'shum'
 ]
 
 #variables with two spatial dimensions (flat)
 MVAR = [
     'cape',
-    'cdcon'
+    'cdcon',
+    'dswrf'
 ]
 
 #number of latitude cells (full rows) above and below target cell to include
@@ -42,11 +50,11 @@ MINLAT, MAXLAT = 33, 46
 MINLON, MAXLON = -104.2, -89.2
 
 #years and months to include
-YEARS = range(2008, 2009)
-MONTHS = range(6,8)
+YEARS = range(1994, 2022)
+MONTHS = range(1,13)
 
 #number of non-storm inputs to create for every storm in a given month
-NNONSTORM = 5
+NNONSTORM = 3
 
 #------------------------------------------------------------------------------
 # %% FUNCTIONS
@@ -57,7 +65,10 @@ def monolevel_path(name, year):
 
 #open a monolevel data file (lazily)
 def open_monolevel(name, year):
-    return open_dataset(monolevel_path(name, year))
+    with warnings.catch_warnings(): #this warning seems too verbose, doesn't matter
+        warnings.simplefilter('ignore', category=xarray.SerializationWarning)
+        ds = open_dataset(monolevel_path(name, year))
+    return ds
 
 #construct the path to a pressure level data file from the name, month, year
 def pressure_path(name, year, month):
@@ -65,7 +76,10 @@ def pressure_path(name, year, month):
 
 #open a pressure level data file (lazily)
 def open_pressure(name, year, month):
-    return open_dataset(pressure_path(name, year, month))
+    with warnings.catch_warnings(): #this warning seems too verbose, doesn't matter
+        warnings.simplefilter('ignore', category=xarray.SerializationWarning)
+        ds = open_dataset(pressure_path(name, year, month))
+    return ds
 
 #--------------------------------------
 
@@ -85,10 +99,14 @@ def write_inputs(ds, name, year, month):
     #file name base
     fnb = join(OUTDIR, f'{year}_{month}_{name}_')
     #write attribute table to compressed file
-    df.to_feather(fnb + 'attributes.feather')
+    fn = fnb + 'attributes.feather'
+    df.to_feather(fn)
+    print('file written:', fn)
     #write the input block to netcdf after stripping off attributes
     X.attrs = {}
-    X.to_netcdf(fnb + 'inputs.nc')
+    fn = fnb + 'inputs.nc'
+    X.to_netcdf(fn)
+    print('file written:', fn)
 
     return None
 
@@ -158,25 +176,25 @@ def blank_input(attrs=dict()):
 def find_cell(q, V):
     n = len(V)
     #handle boundaries
-    assert q >= V[0]
-    assert q <= V[-1]
+    assert q >= V[0], f"value {q} below beginning of range{V[0]}"
+    assert q <= V[-1], f"value {q} above end of range {V[-1]}"
     #bisection search for the containing cell
     L = 0
-    H = n
+    H = n-1
     while H - L > 1:
         M = (H + L) // 2
         if V[M] > q:
             H = M
         else:
             L = M
-
-    return L
+    i = L
+    assert V[i] <= q <= V[i+1]
+    return i
 
 def interpolate_monolevel(time, lat, lon, Lat, Lon, M, k, ds):
     #locate indices of nearest grid cell
     ilat, ilon = nearest_cell(lat, lon, Lat, Lon)
     #find the nearest cell in time
-    #itime = searchsorted(M[k].coords['time'].values, time)
     itime = find_cell(time, M[k].coords['time'].values)
     #slice the variable
     X = M[k][k][
@@ -196,7 +214,6 @@ def interpolate_pressure(time, lat, lon, Lat, Lon, P, k, ds):
     #locate indices of nearest grid cell
     ilat, ilon = nearest_cell(lat, lon, Lat, Lon)
     #find the nearest cell in time
-    #itime = searchsorted(M[k].coords['time'].values, time)
     itime = find_cell(time, P[k].coords['time'].values)
     #slice the variable
     X = P[k][k][
@@ -212,49 +229,29 @@ def interpolate_pressure(time, lat, lon, Lat, Lon, P, k, ds):
     X = (1 - f)*X[0,:,:,:] + f*X[1,:,:,:]
     ds[k][:] = X.values
     return None
-    
-#------------------------------------------------------------------------------
-# %% MAIN
-
-#load the table of storms
-df = read_feather(join(STORMDIR, 'tornado_alley.feather'))
-df.sort_values('time', inplace=True)
-df.index = range(len(df))
-
-#swap some column names for convenience
-cols = list(df.columns)
-for a,b in (('begin_lat', 'lat'), ('begin_lon', 'lon'), ('event_type', 'type')):
-    cols[cols.index(a)] = b
-df.columns = cols
-
-#strip times of their timezone for compatibility
-df['time'] = df['time'].map(lambda x: x.tz_localize(None))
-
-#add year and month columns for convenience
-df['year'] = df.time.map(lambda x: x.year)
-df['month'] = df.time.map(lambda x: x.month)
-
-#convert the 'location_filled' flag to integers for writing netcdf files
-df['location_filled'] = df.location_filled.map(uint8)
 
 #--------------------------------------
-# %%
 
-for year in YEARS:
+def construct_inputs(year, month, df):
 
-    #load monolevel datasets, which cover whole years, lazily
-    M = {name: open_monolevel(name, year) for name in MVAR}
+    #slice out storms during this year-month period
+    sl = df[(df.year == year) & (df.month == month)].copy()
+    sl.sort_values('time', inplace=True)
+    L = len(sl)
+    sl.index = range(L)
+    print(L, 'storm events in {}-{}'.format(year, month))
 
-    for month in MONTHS:
+    #also remove rare events in the last 3 hours of the month
+    t = month_end(year, month) - Timedelta(3, 'hr')
+    sl = sl[sl.time < t.to_numpy()]
+
+    if L > 0:
+
+        #load monolevel datasets, which cover whole years, lazily
+        M = {name: open_monolevel(name, year) for name in MVAR}
 
         #Load pressure level datasets, which cover single months, lazily
         P = {name: open_pressure(name, year, month) for name in PVAR}
-
-        #slice out storms during this year-month period
-        sl = df[(df.year == year) & (df.month == month)].copy()
-        sl.sort_values('time', inplace=True)
-        L = len(sl)
-        sl.index = range(L)
 
         #create blank inputs for each storm
         storms = [blank_input(row) for (_, row) in sl.iterrows()]
@@ -301,15 +298,73 @@ for year in YEARS:
             for i in range(L*NNONSTORM):
                 interpolate_pressure(time[i], lat[i], lon[i], Lat, Lon, P, k, norms[i])
         
+        #close all the monolevel datasets
+        [M[k].close() for k in M]
+
         #close all the pressure level datasets
-        for k in P:
-            P[k].close()
+        [P[k].close() for k in P]
 
         #write the newly created inputs to file as whole-month blocks
         write_inputs(storms, 'storm', year, month)
         write_inputs(norms, 'non-storm', year, month)
+
+    return None
     
-    #close all the monolevel datasets
-    for k in M:
-        M[k].close()
+#------------------------------------------------------------------------------
+# %% MAIN
+
+if __name__ == "__main__":
+
+    #determine cpu count for multiprocessing
+    if cpu_count() < 12: #one for each month at maximum
+        NPROC = cpu_count()
+    else:
+        NPROC = 12
+
+    #load the table of storms
+    df = read_feather(join(STORMDIR, 'tornado_alley.feather'))
+    df.sort_values('time', inplace=True)
+    df.index = range(len(df))
+
+    #swap some column names for convenience
+    cols = list(df.columns)
+    for a,b in (('begin_lat', 'lat'), ('begin_lon', 'lon'), ('event_type', 'type')):
+        cols[cols.index(a)] = b
+    df.columns = cols
+
+    #strip times of their timezone for compatibility
+    df['time'] = df['time'].map(lambda x: x.tz_localize(None))
+
+    #add year and month columns for convenience
+    df['year'] = df.time.map(lambda x: x.year)
+    df['month'] = df.time.map(lambda x: x.month)
+
+    #convert the 'location_filled' flag to integers for writing netcdf files
+    df['location_filled'] = df.location_filled.map(uint8)
+
+    #start the multiprocessing pool
+    pool = Pool(NPROC)
+    print(f'pool started with {NPROC} processes')
+
+    for year in YEARS:
+        print('beginning year', year)
+
+        #set up asynchronous tasks for each month of data
+        tasks = []
+        for month in MONTHS:
+            tasks.append(
+                pool.apply_async(
+                    construct_inputs,
+                    (year, month, df)
+                )
+            )
+        #fetch each month's task
+        [task.get() for task in tasks]
+
+        print('end year', year)
+        
+    #shut down the pool
+    print('closing pool')
+    pool.close()
+
 # %%
