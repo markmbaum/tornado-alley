@@ -14,13 +14,13 @@ from multiprocessing import Pool
 # %% INPUTS
 
 #directory where the tornado alley storm data is located
-STORMDIR = join('..', 'data', 'pro')
+STORMDIR = join('..', 'data')
 
 #directory with 'monolevel' and 'pressure' subdirectories
-NCDIR = join('..', 'data', 'netcdf')
+NCDIR = join('..', 'data', 'reanalysis')
 
 #directory for output netcdf files
-OUTDIR = join('..', 'data', 'pro', 'inputs')
+OUTDIR = join('..', 'data', 'inputs')
 
 #variables with three spatial dimensions (on pressure levels)
 PVAR = [
@@ -50,7 +50,7 @@ MINLAT, MAXLAT = 33, 46
 MINLON, MAXLON = -104.2, -89.2
 
 #years and months to include
-YEARS = range(1994, 2022)
+YEARS = range(2021, 2022)
 MONTHS = range(1,13)
 
 #number of non-storm inputs to create for every storm in a given month
@@ -234,80 +234,86 @@ def interpolate_pressure(time, lat, lon, Lat, Lon, P, k, ds):
 
 def construct_inputs(year, month, df):
 
-    #slice out storms during this year-month period
-    sl = df[(df.year == year) & (df.month == month)].copy()
-    sl.sort_values('time', inplace=True)
+    try:
 
-    #also remove rare events in the last 3 hours of the month
-    t = month_end(year, month) - Timedelta(3, 'hr')
-    sl = sl[sl.time < t.to_numpy()]
+        #slice out storms during this year-month period
+        sl = df[(df.year == year) & (df.month == month)].copy()
+        sl.sort_values('time', inplace=True)
 
-    L = len(sl)
-    sl.index = range(L)
-    print(L, 'storm events in {}-{}'.format(year, month))
+        #also remove rare events in the last 3 hours of the month
+        t = month_end(year, month) - Timedelta(3, 'hr')
+        sl = sl[sl.time < t.to_numpy()]
 
-    if L > 0:
+        L = len(sl)
+        sl.index = range(L)
+        print(L, 'storm events in {}-{}'.format(year, month))
 
-        #load monolevel datasets, which cover whole years, lazily
-        M = {name: open_monolevel(name, year) for name in MVAR}
+        if L > 0:
 
-        #Load pressure level datasets, which cover single months, lazily
-        P = {name: open_pressure(name, year, month) for name in PVAR}
+            #load monolevel datasets, which cover whole years, lazily
+            M = {name: open_monolevel(name, year) for name in MVAR}
 
-        #create blank inputs for each storm
-        storms = [blank_input(row) for (_, row) in sl.iterrows()]
+            #Load pressure level datasets, which cover single months, lazily
+            P = {name: open_pressure(name, year, month) for name in PVAR}
 
-        #create random coordinates for normal (non-storm) conditions
-        time, lat, lon = random_coordinates(NNONSTORM*L, year, month)
+            #create blank inputs for each storm
+            storms = [blank_input(row) for (_, row) in sl.iterrows()]
 
-        #create blank for non-storm inputs, annotated with distance to closest storm (including in time)
-        idx = searchsorted(sl.time, time)
-        idx[idx >= L] = L - 1
-        norms = []
-        for i in range(len(idx)):
-            j = idx[i]
-            dt = abs((time[i] - sl.time[j]).total_seconds())/3600
-            dlat = abs(lat[i] - sl.lat[j])
-            dlon = abs(lon[i] - sl.lon[j])
-            ds = blank_input(dict(
-                time=time[i],
-                lat=lat[i],
-                lon=lon[i],
-                type='Non-storm',
-                time_close=dt, #time of closest storm [hours]
-                lat_close=dlat, #latitude of closest storm [degrees]
-                lon_close=dlon, #longitude of closest storm [degrees]
-                type_close=sl.type[j] #type of nearest storm
-            ))
-            norms.append(ds)
+            #create random coordinates for normal (non-storm) conditions
+            time, lat, lon = random_coordinates(NNONSTORM*L, year, month)
 
-        #retrieve the lat-lon grid
-        X = next(iter(M.values()))
-        Lat, Lon = X.coords['lat'].values, X.coords['lon'].values
+            #create blank for non-storm inputs, annotated with distance to closest storm (including in time)
+            idx = searchsorted(sl.time, time)
+            idx[idx >= L] = L - 1
+            norms = []
+            for i in range(len(idx)):
+                j = idx[i]
+                dt = abs((time[i] - sl.time[j]).total_seconds())/3600
+                dlat = abs(lat[i] - sl.lat[j])
+                dlon = abs(lon[i] - sl.lon[j])
+                ds = blank_input(dict(
+                    time=time[i],
+                    lat=lat[i],
+                    lon=lon[i],
+                    type='Non-storm',
+                    time_close=dt, #time of closest storm [hours]
+                    lat_close=dlat, #latitude of closest storm [degrees]
+                    lon_close=dlon, #longitude of closest storm [degrees]
+                    type_close=sl.type[j] #type of nearest storm
+                ))
+                norms.append(ds)
 
-        #fill in the blank input blocks
-        for k in M:
-            #storms
-            for i in range(L):
-                interpolate_monolevel(sl.time[i], sl.lat[i], sl.lon[i], Lat, Lon, M, k, storms[i])
-            for i in range(L*NNONSTORM):
-                interpolate_monolevel(time[i], lat[i], lon[i], Lat, Lon, M, k, norms[i])
-        for k in P:
-            #storms
-            for i in range(L):
-                interpolate_pressure(sl.time[i], sl.lat[i], sl.lon[i], Lat, Lon, P, k, storms[i])
-            for i in range(L*NNONSTORM):
-                interpolate_pressure(time[i], lat[i], lon[i], Lat, Lon, P, k, norms[i])
-        
-        #close all the monolevel datasets
-        [M[k].close() for k in M]
+            #retrieve the lat-lon grid
+            X = next(iter(M.values()))
+            Lat, Lon = X.coords['lat'].values, X.coords['lon'].values
 
-        #close all the pressure level datasets
-        [P[k].close() for k in P]
+            #fill in the blank input blocks
+            for k in M:
+                #storms
+                for i in range(L):
+                    interpolate_monolevel(sl.time[i], sl.lat[i], sl.lon[i], Lat, Lon, M, k, storms[i])
+                for i in range(L*NNONSTORM):
+                    interpolate_monolevel(time[i], lat[i], lon[i], Lat, Lon, M, k, norms[i])
+            for k in P:
+                #storms
+                for i in range(L):
+                    interpolate_pressure(sl.time[i], sl.lat[i], sl.lon[i], Lat, Lon, P, k, storms[i])
+                for i in range(L*NNONSTORM):
+                    interpolate_pressure(time[i], lat[i], lon[i], Lat, Lon, P, k, norms[i])
+            
+            #close all the monolevel datasets
+            [M[k].close() for k in M]
 
-        #write the newly created inputs to file as whole-month blocks
-        write_inputs(storms, 'storm', year, month)
-        write_inputs(norms, 'non-storm', year, month)
+            #close all the pressure level datasets
+            [P[k].close() for k in P]
+
+            #write the newly created inputs to file as whole-month blocks
+            write_inputs(storms, 'storm', year, month)
+            write_inputs(norms, 'non-storm', year, month)
+
+    except RuntimeError as e:
+
+        print('runtime error in {}-{}, probably failed to read netcdf file'.format(year, month))
 
     return None
     
@@ -315,12 +321,6 @@ def construct_inputs(year, month, df):
 # %% MAIN
 
 if __name__ == "__main__":
-
-    #determine cpu count for multiprocessing
-    if cpu_count() < 12: #one for each month at maximum
-        NPROC = cpu_count()
-    else:
-        NPROC = 12
 
     #load the table of storms
     df = read_feather(join(STORMDIR, 'tornado_alley.feather'))
@@ -344,14 +344,12 @@ if __name__ == "__main__":
     df['location_filled'] = df.location_filled.map(uint8)
 
     #start the multiprocessing pool
-    pool = Pool(NPROC)
-    print(f'pool started with {NPROC} processes')
+    pool = Pool(cpu_count())
+    print('pool started with {} processes'.format(cpu_count()))
 
+    #set up asynchronous tasks for each month of data
+    tasks = []
     for year in YEARS:
-        print('beginning year', year)
-
-        #set up asynchronous tasks for each month of data
-        tasks = []
         for month in MONTHS:
             tasks.append(
                 pool.apply_async(
@@ -359,10 +357,8 @@ if __name__ == "__main__":
                     (year, month, df)
                 )
             )
-        #fetch each month's task
-        [task.get() for task in tasks]
-
-        print('end year', year)
+    #fetch each month's task
+    [task.get() for task in tasks]
         
     #shut down the pool
     print('closing pool')

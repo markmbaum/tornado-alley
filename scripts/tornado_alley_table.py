@@ -132,17 +132,23 @@ df.drop(columns=[
     'year',
     'cz_type',
     'cz_name',
-    'begin_location'
+    'begin_location',
+    'damage_property',
+    'damage_crops',
+    'magnitude'
 ], inplace=True)
 
+#%%
+
 #remove nulls
-df.dropna(inplace=True)
+print(df.isnull().sum())
 
 # %%
 
 #all done
+df.reindex(columns=sorted(df.columns)).sort_values('time')
 df.index = range(len(df))
-df.reindex(columns=sorted(df.columns)).sort_values('time').to_feather(fnout)
+df.to_feather(fnout)
 print('file written:', fnout)
 
 # %%

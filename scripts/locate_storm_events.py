@@ -1,10 +1,12 @@
+# %%
+
 from os import listdir
 from os.path import join
 from pandas import read_csv, concat
 from geopandas import read_file
 from numpy import *
 
-#------------------------------------------------------------------------------
+#%%----------------------------------------------------------------------------
 
 #input data directory
 dirin = join('..', 'data',  'raw', 'storm-events', 'extracted')
@@ -47,18 +49,21 @@ fncounty = join('..', 'data', 'raw', 'us-counties', 'cb_2018_us_county_20m.shp')
 #state fips codes
 fnfips = join('..', 'data', 'raw', 'state-fips', 'state_fips.csv')
 
-#------------------------------------------------------------------------------
+#%%----------------------------------------------------------------------------
 
 #load all the individual years of data
 storm = []
 for fn in listdir(dirin):
     df = read_csv(join(dirin, fn), low_memory=False)
-    df.columns = [c.lower() for c in df.columns]
+    df.columns = [c.lower().strip() for c in df.columns]
     df = df[cols].copy()
-    df['state'] = [x.lower() for x in df.state.values]
+    df.dropna(subset=['state'], inplace=True)
+    df['state'] = [x.lower().strip() for x in df.state.values]
     storm.append(df)
 #combine into a single table
 storm = concat(storm, ignore_index=True)
+
+#%%
 
 #read in counties and state codes
 county = read_file(fncounty)
@@ -81,6 +86,8 @@ county.statefp = county.statefp.astype(int)
 storm['location_filled'] = zeros(len(storm), dtype=bool_)
 
 print("fraction missing location ~", sum(isnan(storm.begin_lon))/len(storm))
+
+#%%
 
 #approximate latitude and longitude for each storm event, where missing
 for i in storm.index:
@@ -109,5 +116,8 @@ for col in storm.columns:
     if d == float64:
         storm[col] = storm[col].astype(float32)
 
+#%%
+
 storm.to_feather(fnout)
 print("file written:", fnout)
+# %%
