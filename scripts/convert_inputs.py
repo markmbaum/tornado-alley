@@ -2,6 +2,7 @@ import xarray as xr
 import pandas as pd
 import numpy as np
 import tensorflow as tf
+from os import cpu_count
 from os.path import join, isfile
 from multiprocessing import Pool
 
@@ -23,21 +24,15 @@ PVAR = [
     'shum'
 ]
 
-#mapping storm strings to numeric indices
-storm2label = {
-    'Non-storm': 0,
-    'Thunderstorm Wind': 1,
-    'Hail': 2,
-    'Flash Flood': 3,
-    'Winter Storm': 4,
-    'High Wind': 5,
-    'Heavy Snow': 6,
-    'Tornado': 7
-}
-
 YEARS = range(2000, 2022)
 
 MONTHS = range(1, 13)
+
+storm2label = {
+    'Non-storm': 0,
+    'Tornado': 1,
+    'Winter Storm': 2
+}
 
 # %% --------------------------------------------------------------------------
 
@@ -54,7 +49,15 @@ def convert_dataset(year, month):
     idx = np.flatnonzero(b)
     nat = nat.iloc[idx]
     nin = nin.sel({'index': idx})
-    #also, if needed, remove some non-storms randomly for even numbers of each
+    #take only tornados and winter storms
+    b = ((sat['type'] == 'Tornado') | (sat['type'] == 'Winter Storm')).values
+    idx = np.flatnonzero(b)
+    sat = sat.iloc[idx]
+    sin = sin.sel({'index': idx})
+    #check for empty months
+    if len(sat) == 0:
+        return None, None, None
+    #if needed (probably is), remove some non-storms randomly for even number of storms/non-storms
     if len(nat) > len(sat):
         idx = np.arange(len(nat))
         np.random.shuffle(idx)
@@ -76,11 +79,14 @@ def convert_dataset(year, month):
 def convert_save_dataset(year, month):
 
     inputs, labels, storm_types = convert_dataset(year, month)
-    np.save(join(OUTDIR, f'{year}_{month}_inputs'), inputs)
-    np.save(join(OUTDIR, f'{year}_{month}_labels'), labels)
-    with open(join(OUTDIR, 'storm_types.txt'), 'w') as ofile:
-        ofile.write('\n'.join(storm_types))
-    print(f'{year}-{month} complete')
+    if inputs is not None:
+        np.save(join(OUTDIR, f'{year}_{month}_inputs'), inputs)
+        np.save(join(OUTDIR, f'{year}_{month}_labels'), labels)
+        with open(join(OUTDIR, f'{year}_{month}_storm_types.txt'), 'w') as ofile:
+            ofile.write('\n'.join(storm_types))
+        print(f'{year}-{month} complete')
+    else:
+        print(f'{year}-{month} empty')
     
     return None
 
@@ -88,7 +94,9 @@ def convert_save_dataset(year, month):
 
 if __name__ == '__main__':
 
-    pool = Pool()
+    nproc = cpu_count()
+    pool = Pool(nproc)
+    print(f'pool started with {nproc} processes')
     tasks = []
 
     for year in YEARS:
@@ -107,3 +115,5 @@ if __name__ == '__main__':
     
     #fetch each month's task
     [task.get() for task in tasks]
+
+    pool.close()
