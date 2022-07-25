@@ -9,10 +9,10 @@ from multiprocessing import Pool
 # %% --------------------------------------------------------------------------
 
 #directory with raw inputs
-RAWDIR = join('..', 'data', 'raw-dataset')
+RAWDIR = join('..', 'data', 'raw')
 
 #directory for output converted
-OUTDIR = join('..', 'data', 'converted-dataset')
+OUTDIR = join('..', 'data', 'pro')
 
 #3D variables in the datasets (pressure level)
 PVAR = [
@@ -70,7 +70,7 @@ def convert_dataset(year, month):
     #take only the storm types for labels, but keep the strings around
     storm_types = list(labels['type'].values)
     #one-hot encoding for labels
-    labels = tf.one_hot(labels['type'].map(storm2label), 8).numpy()
+    labels = tf.one_hot(labels['type'].map(storm2label), len(storm2label.keys())).numpy()
     #construct a single array of 3D input fields
     inputs = np.stack([inputs[v].as_numpy() for v in PVAR], axis=-1)
 
